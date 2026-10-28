@@ -216,6 +216,7 @@ function vocalVoice(midi, when, durSteps, vol=0.5){
   o.start(t); o.stop(t+dur+0.05);
 }
 function playVocalNotesAt(sec, step, t){
+  if (HIDE_VOCALS) return;
   (sec.vocalNotes || []).filter(n=>n.s===step).forEach(n=> vocalVoice(n.midi, t, n.len || 1));
 }
 
@@ -248,6 +249,7 @@ const DRUM_PIECES = ['kick','snare','hat','openhat','tom','crash'];
 const DRUM_LABELS = { kick:'Kick', snare:'Snare', hat:'Closed hi-hat', openhat:'Open hi-hat', tom:'Tom', crash:'Crash' };
 function padTap(inst, arg){
   // Live taps: play now AND, while recording, quantize into the current section.
+  triggerAvatar(inst.id);
   if (inst.id==='drum') drumVoice(arg); else playVoice(TRACK_INDEX[inst.id], arg.freq);
   if (recording) recordTap(inst, arg);
   document.getElementById('nowPlaying').textContent = 'Playing ' + inst.name + ' — ' + (inst.id==='drum' ? DRUM_LABELS[arg] : arg.name);
@@ -285,6 +287,7 @@ INSTRUMENTS.forEach((inst, i)=>{
   const g = new THREE.Group(); g.position.set(x, 0.07, z);
   g.rotation.y = Math.atan2(-x, -z);
   scene.add(g); groups.push(g);
+  makeAvatar(inst, x, z, g.rotation.y);
   loader.load('./instruments/' + inst.id + '.glb', (glb)=>{
     const m = glb.scene; m.traverse(o=>{ if (o.isMesh){ o.castShadow = true; pickMeshes.push(o); o.userData.inst = i; } });
     g.add(m);
@@ -299,6 +302,52 @@ INSTRUMENTS.forEach((inst, i)=>{
   document.getElementById('glbLinks').appendChild(a2);
 });
 const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+// ---- Avatars: one roster-style figure per instrument, animated when used ----
+const AVATARS = {};
+function makeAvatar(inst, gx, gz, rotY){
+  const g = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({ color:0xe6b088, roughness:0.8 });
+  const outfit = new THREE.MeshStandardMaterial({ color: parseInt(inst.color.slice(1), 16), roughness:0.8 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.29, 0.54, 4, 12), outfit);
+  body.position.y = 0.66; g.add(body);
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.15, 20), skin);
+  head.rotation.x = Math.PI/2; head.position.y = 1.66; g.add(head);
+  const face = new THREE.Mesh(new THREE.CircleGeometry(0.30, 20), new THREE.MeshStandardMaterial({ color:0xfff2df, roughness:0.9 }));
+  face.position.set(0, 1.66, 0.083); g.add(face);
+  function arm(side){
+    const pivot = new THREE.Group(); pivot.position.set(0.30*side, 0.95, 0);
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 10), outfit);
+    m.position.y = -0.25; pivot.add(m); g.add(pivot); return pivot;
+  }
+  const armL = arm(-1), armR = arm(1);
+  [-0.19, 0.19].forEach(x=>{
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.14, 0.42), skin);
+    foot.position.set(x, 0.15, 0.05); g.add(foot);
+  });
+  const dir = Math.hypot(gx, gz) || 1;
+  g.position.set(gx/dir*3.9, 0.07, gz/dir*3.9);
+  g.rotation.y = rotY;
+  scene.add(g);
+  AVATARS[inst.id] = { group:g, armL, armR, baseY:0.07, animUntil:0 };
+}
+function triggerAvatar(id){
+  const a = AVATARS[id]; if (!a) return;
+  a.animUntil = performance.now() + 600;
+}
+function updateAvatars(){
+  const now = performance.now();
+  Object.values(AVATARS).forEach(a=>{
+    if (now < a.animUntil){
+      const phase = 1 - (a.animUntil - now)/600; // 0 -> 1 over the hit
+      a.group.position.y = a.baseY + Math.abs(Math.sin(phase*Math.PI*2))*0.08;
+      a.armL.rotation.x = -0.9*Math.sin(phase*Math.PI*2);
+      a.armR.rotation.x = -0.9*Math.sin(phase*Math.PI*2 + 0.6);
+    } else {
+      a.group.position.y = a.baseY; a.armL.rotation.x = 0; a.armR.rotation.x = 0;
+    }
+  });
+}
+
 canvas.addEventListener('pointerdown', (e)=>{
   const r = canvas.getBoundingClientRect();
   ptr.x = ((e.clientX - r.left)/r.width)*2 - 1;
@@ -312,8 +361,12 @@ function resize(){
   renderer.setSize(w, h, false); camera.aspect = w/h; camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(canvas); resize();
-renderer.setAnimationLoop(()=> renderer.render(scene, camera));
+renderer.setAnimationLoop(()=>{ updateAvatars(); renderer.render(scene, camera); });
 select(0);
+
+// Vocals are HIDDEN for now (user-directed 2026-10-28): the vocal tab, panel and
+// playback are off, but saved vocalNotes data is kept intact for unhiding later.
+const HIDE_VOCALS = true;
 
 // ---- Song model: sections of 8 beats (32 sixteenth steps), each full of tracks ----
 const STEPS = 32; // 8 beats x 4 sixteenths
@@ -335,14 +388,14 @@ function renderSections(){
   const el = document.getElementById('sectionList'); el.innerHTML = '';
   song.sections.forEach((s, i)=>{
     const b = document.createElement('button'); b.className = 'btn' + (i===sectionIdx ? ' on' : '');
-    b.textContent = (i+1) + '. ' + s.name + (s.vocalNotes && s.vocalNotes.length ? ' 🎤' : '');
+    b.textContent = (i+1) + '. ' + s.name + (!HIDE_VOCALS && s.vocalNotes && s.vocalNotes.length ? ' 🎤' : '');
     b.onclick = ()=>{ sectionIdx = i; renderSections(); renderGrid(); };
     el.appendChild(b);
   });
 }
 function renderTrackTabs(){
   const el = document.getElementById('trackTabs'); el.innerHTML = '';
-  ['drums'].concat(MELODIC.map(i=>i.id)).concat(['vocal']).forEach(t=>{
+  (HIDE_VOCALS ? ['drums'].concat(MELODIC.map(i=>i.id)) : ['drums'].concat(MELODIC.map(i=>i.id)).concat(['vocal'])).forEach(t=>{
     const b = document.createElement('button'); b.className = 'btn' + (t===trackTab ? ' on' : '');
     b.textContent = t==='drums' ? '🥁 Drums' : t==='vocal' ? '🎤 Vocal' : INSTRUMENTS.find(i=>i.id===t).name;
     b.onclick = ()=>{ trackTab = t; renderTrackTabs(); renderGrid(); };
@@ -412,10 +465,13 @@ function recordTap(inst, arg){
 // ---- Playback: lookahead scheduler, quantized to the tempo ----
 const playState = { playing:false, mode:'section', sectionIdx:0, step:0, nextTime:0, timer:null, sectionStartTime:null };
 function playStepSounds(sec, step, t){
+  if (DRUM_PIECES.some(p=> sec.drums[p].includes(step))){ triggerAvatar('drum'); }
   DRUM_PIECES.forEach(p=>{ if (sec.drums[p].includes(step)) drumVoice(p, t); });
   MELODIC.forEach(inst=>{
     const notes = scaleNotes(inst);
-    sec.tracks[inst.id].filter(c=>c.s===step).forEach(c=> playVoice(TRACK_INDEX[inst.id], notes[c.n].freq, 0.5, t));
+    const hits = sec.tracks[inst.id].filter(c=>c.s===step);
+    if (hits.length) triggerAvatar(inst.id);
+    hits.forEach(c=> playVoice(TRACK_INDEX[inst.id], notes[c.n].freq, 0.5, t));
   });
   playVocalNotesAt(sec, step, t);
   // Step highlight (approximate, via timeout to the step's audio time).
@@ -588,9 +644,9 @@ function playVinyl(vinyl){
       const step = vinylPlaying.step % 16, t = vinylPlaying.nextTime;
       GAME_TRACKS.forEach((tr, ti)=>{
         const val = parseInt(vinyl.pattern.slice(ti*4, ti*4+4), 16);
-        if ((val >> (15-step)) & 1) playVoice(ti, GAME_NOTES[tr][step % 5], 0.42, t);
+        if ((val >> (15-step)) & 1){ if (AVATARS[tr]) triggerAvatar(tr); playVoice(ti, GAME_NOTES[tr][step % 5], 0.42, t); }
       });
-      (vinyl.vocalNotes || []).filter(n=>n.s===step).forEach(n=> vocalVoice(n.midi, t, n.len || 1));
+      if (!HIDE_VOCALS) (vinyl.vocalNotes || []).filter(n=>n.s===step).forEach(n=> vocalVoice(n.midi, t, n.len || 1));
       vinylPlaying.nextTime += stepDur(); vinylPlaying.step++;
     }
   }, 25);
