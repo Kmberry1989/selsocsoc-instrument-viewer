@@ -32,7 +32,7 @@
 <body>
 <header>
   <h1>🎵 Plaza Jam — Loop Studio</h1>
-  <p>Click an instrument in the 3D arc, or pick one below. Then build a song: each section is <strong>8 beats</strong> of tracks for every instrument, plus a vocal. Piece sections together, save the song, and play it back.</p>
+  <p>Click an instrument in the 3D arc, or pick one below. Then build a song: each section is <strong>8 beats</strong> of tracks for every instrument, plus a vocal. Piece sections together, then <strong>press the song to vinyls</strong> — vinyls are pattern data only, no audio, and they loop procedurally through the same voices in the game.</p>
 </header>
 <main>
   <canvas id="stage"></canvas>
@@ -44,7 +44,7 @@
   </div>
   <div class="panel" id="picker"></div>
   <div class="panel" id="glbs"><strong>Download the .glb files:</strong> <span id="glbLinks"></span>
-  <p class="small">The drum is a full rock kit now: kick, snare, two rack toms, floor tom, hi-hat, crash and ride.</p></div>
+  <p class="small">The drum is a full rock kit now: kick, snare, two rack toms, two floor toms, closed hi-hat, open hi-hat, crash, ride, and a throne.</p></div>
 
   <div class="panel" id="studio">
     <h2>🎛️ Loop studio</h2>
@@ -60,11 +60,11 @@
       <span id="playState" class="small"></span>
     </p>
     <p>Song name: <input type="text" id="songName" value="My first song">
-      <button class="btn" id="saveSong">💾 Save song</button>
-      <button class="btn" id="exportSong">⬇ Export song file</button>
-      <label class="btn">⬆ Import song file <input type="file" id="importSong" accept=".json" hidden></label>
+      <button class="btn" id="pressVinyl">💿 Press song to vinyls</button>
+      <label class="btn">⬆ Import vinyl file <input type="file" id="importVinyl" accept=".json" hidden></label>
     </p>
-    <p>Saved songs: <span id="savedList">— none yet —</span></p>
+    <p class="small">Pressing makes one vinyl per 16-step half of each section, in the game's vinyl format (7 tracks × 16 steps, pattern only). The game's record player re-synthesizes each vinyl procedurally — no audio is recorded onto a vinyl, so exact piano-roll pitches and the mic vocal do not travel with it: the loop shape does, and the game cycles each instrument's 5 notes by step. The vinyl file the button downloads is the same format the game's record player imports.</p>
+    <p>Pressed vinyls: <span id="vinylList">— none yet —</span></p>
     <p>Sections (8 beats each, in song order):
       <span id="sectionList"></span>
       <button class="btn" id="addSection">+ Section</button>
@@ -188,6 +188,7 @@ function drumVoice(piece, when=null, vol=0.6){
   if (piece==='kick') tone(150, 40, 0.28, vol);
   else if (piece==='snare'){ noiseThrough('bandpass', 1800, 0.18, vol*0.8); tone(190, 140, 0.12, vol*0.5, 'triangle'); }
   else if (piece==='hat') noiseThrough('highpass', 8000, 0.05, vol*0.5);
+  else if (piece==='openhat') noiseThrough('highpass', 8000, 0.35, vol*0.45);
   else if (piece==='tom') tone(200, 90, 0.3, vol);
   else if (piece==='crash') noiseThrough('highpass', 5000, 0.9, vol*0.6);
 }
@@ -217,8 +218,8 @@ ring.rotation.x = Math.PI/2; ring.position.y = 0.09; scene.add(ring);
 const loader = new GLTFLoader();
 const groups = [], pickMeshes = [];
 let selected = -1, highlight = null;
-const DRUM_PIECES = ['kick','snare','hat','tom','crash'];
-const DRUM_LABELS = { kick:'Kick', snare:'Snare', hat:'Hi-hat', tom:'Tom', crash:'Crash' };
+const DRUM_PIECES = ['kick','snare','hat','openhat','tom','crash'];
+const DRUM_LABELS = { kick:'Kick', snare:'Snare', hat:'Closed hi-hat', openhat:'Open hi-hat', tom:'Tom', crash:'Crash' };
 function padTap(inst, arg){
   // Live taps: play now AND, while recording, quantize into the current section.
   if (inst.id==='drum') drumVoice(arg); else playVoice(TRACK_INDEX[inst.id], arg.freq);
@@ -436,6 +437,7 @@ function startPlay(mode){
   document.getElementById('playState').textContent = mode==='song' ? '▶ Playing song: ' + song.name : '▶ Playing section: ' + curSection().name;
 }
 function stopPlay(updateLabel=true){
+  if (vinylPlaying) stopVinylPlay();
   playState.playing = false;
   if (playState.timer){ clearInterval(playState.timer); playState.timer = null; }
   document.querySelectorAll('#trackGrid .cell').forEach(el=> el.classList.remove('now'));
@@ -491,22 +493,88 @@ function playAutotuned(sec, t0){
   else fetch(sec.vocal).then(r=>r.arrayBuffer()).then(buf=> actx.decodeAudioData(buf)).then(audio=>{ vocalCache.set(sec, audio); go(audio); }).catch(()=>{});
 }
 
-// ---- Songs saved: this device (localStorage) + export/import files ----
-const LS_KEY = 'plaza-jam-songs-v1';
-function loadSaved(){ try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch(e){ return []; } }
-function renderSaved(){
-  const list = loadSaved(), el = document.getElementById('savedList'); el.innerHTML = '';
+// ---- Vinyls: the game's save format, pattern-only, played back procedurally ----
+// Game vinyl: {id, title (<=24), artist, instrument, pattern (28 hex = 7 tracks x 16 steps), bpm}.
+// Game track order: 0 drum, 1 chimes, 2 bass, 3 flute, 4 piano, 5 harp, 6 guitar.
+// A studio section is 32 steps, so it presses as TWO vinyls (steps 0-15, 16-31).
+// Drum pieces collapse to the drum track (the game plays its drum voice, not kit pieces).
+// Melodic pitches collapse to on/off per step (the game cycles each instrument's 5 notes by step).
+// The mic vocal never goes on a vinyl: vinyls carry no audio.
+const GAME_TRACKS = ['drum','chimes','bass','flute','piano','harp','guitar'];
+const GAME_NOTES = {
+  drum:[130.81,146.83,164.81,196.00,220.00], chimes:[523.25,587.33,659.25,783.99,880.00],
+  bass:[65.41,73.42,82.41,98.00,110.00], flute:[261.63,293.66,329.63,392.00,440.00],
+  piano:[261.63,293.66,329.63,392.00,440.00], harp:[523.25,587.33,659.25,783.99,880.00],
+  guitar:[130.81,146.83,164.81,196.00,220.00]
+};
+function sectionToVinyls(sec, songName, bpm, secNum){
+  const out = [];
+  for (let chunk=0; chunk<2; chunk++){
+    let hex = '';
+    GAME_TRACKS.forEach(t=>{
+      let val = 0;
+      for (let s=0;s<16;s++){
+        const step = chunk*16 + s; let on = false;
+        if (t==='flute') on = false;
+        else if (t==='drum') on = DRUM_PIECES.some(p=> sec.drums[p].includes(step));
+        else on = sec.tracks[t].some(c=>c.s===step);
+        val = (val<<1) | (on ? 1 : 0);
+      }
+      hex += val.toString(16).padStart(4,'0');
+    });
+    const steps = hex.replace(/0/g,'').length ? 1 : 0;
+    if (!steps) continue;
+    const firstTrack = GAME_TRACKS.findIndex(t=> t!=='flute' && hex.slice(GAME_TRACKS.indexOf(t)*4, GAME_TRACKS.indexOf(t)*4+4) !== '0000');
+    out.push({
+      id: 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2,7),
+      title: (songName + ' S' + secNum + (chunk ? 'B' : 'A')).slice(0,24),
+      artist: 'Plaza Jam', instrument: firstTrack < 0 ? 0 : firstTrack,
+      pattern: hex, bpm: bpm, createdAt: Date.now()
+    });
+  }
+  return out;
+}
+function validVinyl(v){
+  return !!v && typeof v === 'object' && typeof v.id === 'string' && !!v.id &&
+    typeof v.title === 'string' && !!v.title && v.title.length <= 24 &&
+    typeof v.pattern === 'string' && /^[0-9a-f]{28}$/.test(v.pattern) &&
+    Number.isInteger(v.instrument) && v.instrument >= 0 && v.instrument < 7;
+}
+const VINYL_LS = 'plaza-jam-vinyls-v1';
+function loadVinyls(){ try { return JSON.parse(localStorage.getItem(VINYL_LS)) || []; } catch(e){ return []; } }
+function storeVinyls(list){ localStorage.setItem(VINYL_LS, JSON.stringify(list.slice(0,24))); }
+let vinylPlaying = null; // {vinyl, step, nextTime, timer}
+function stopVinylPlay(){
+  if (vinylPlaying && vinylPlaying.timer) clearInterval(vinylPlaying.timer);
+  vinylPlaying = null; renderVinyls();
+}
+function playVinyl(vinyl){
+  ensureCtx(); stopPlay(); stopVinylPlay();
+  vinylPlaying = { vinyl, step:0, nextTime: actx.currentTime + 0.06, timer:null };
+  vinylPlaying.timer = setInterval(()=>{
+    if (!vinylPlaying) return;
+    while (vinylPlaying.nextTime < actx.currentTime + 0.12){
+      const step = vinylPlaying.step % 16, t = vinylPlaying.nextTime;
+      GAME_TRACKS.forEach((tr, ti)=>{
+        const val = parseInt(vinyl.pattern.slice(ti*4, ti*4+4), 16);
+        if ((val >> (15-step)) & 1) playVoice(ti, GAME_NOTES[tr][step % 5], 0.42, t);
+      });
+      vinylPlaying.nextTime += stepDur(); vinylPlaying.step++;
+    }
+  }, 25);
+  renderVinyls();
+}
+function renderVinyls(){
+  const list = loadVinyls(), el = document.getElementById('vinylList'); el.innerHTML = '';
   if (!list.length){ el.textContent = '— none yet —'; return; }
-  list.forEach((s, i)=>{
-    const b = document.createElement('button'); b.className = 'btn'; b.textContent = '▶ ' + s.name + ' (' + s.sections.length + ' sections, ' + s.bpm + ' BPM)';
-    b.onclick = ()=>{ song = JSON.parse(JSON.stringify(s)); document.getElementById('songName').value = song.name; document.getElementById('bpm').value = song.bpm; document.getElementById('bpmVal').textContent = song.bpm + ' BPM'; sectionIdx = 0; renderSections(); renderGrid(); };
+  list.forEach((v, i)=>{
+    const b = document.createElement('button'); b.className = 'btn' + (vinylPlaying && vinylPlaying.vinyl.id===v.id ? ' on' : '');
+    b.textContent = (vinylPlaying && vinylPlaying.vinyl.id===v.id ? '⏹ ' : '▶ ') + v.title + ' (' + v.bpm + ' BPM)';
+    b.onclick = ()=>{ if (vinylPlaying && vinylPlaying.vinyl.id===v.id) stopVinylPlay(); else playVinyl(v); };
     const d = document.createElement('button'); d.className = 'btn'; d.textContent = '✕';
-    d.onclick = ()=>{ const l = loadSaved(); l.splice(i,1); localStorage.setItem(LS_KEY, JSON.stringify(l)); renderSaved(); };
+    d.onclick = ()=>{ const l = loadVinyls(); l.splice(i,1); storeVinyls(l); if (vinylPlaying && vinylPlaying.vinyl.id===v.id) stopVinylPlay(); renderVinyls(); };
     el.appendChild(b); el.appendChild(d);
   });
-}
-function currentSongSnapshot(){
-  const s = JSON.parse(JSON.stringify(song)); s.name = document.getElementById('songName').value || 'Untitled song'; return s;
 }
 
 // ---- Wiring ----
@@ -529,29 +597,32 @@ document.getElementById('rockPattern').onclick = ()=>{
   [0,8,16,24].forEach(s=> d.kick.push(s)); [4,12,20,28].forEach(s=> d.snare.push(s));
   for (let s=0;s<STEPS;s+=2) d.hat.push(s);
   [0,16].forEach(s=> d.crash.push(s));
+  [14,30].forEach(s=> d.openhat.push(s));
   renderGrid();
 };
-document.getElementById('saveSong').onclick = ()=>{
-  const s = currentSongSnapshot(), list = loadSaved();
-  const ix = list.findIndex(x=>x.name===s.name); if (ix>=0) list[ix] = s; else list.push(s);
-  localStorage.setItem(LS_KEY, JSON.stringify(list)); renderSaved();
-  document.getElementById('playState').textContent = '💾 Saved "' + s.name + '" on this device (' + s.sections.length + ' sections).';
+document.getElementById('pressVinyl').onclick = ()=>{
+  const name = document.getElementById('songName').value || 'Untitled song';
+  const pressed = [];
+  song.sections.forEach((sec, i)=> pressed.push(...sectionToVinyls(sec, name, song.bpm, i+1)));
+  if (!pressed.length){ document.getElementById('playState').textContent = 'Nothing to press — this song has no notes yet.'; return; }
+  const list = pressed.concat(loadVinyls()); storeVinyls(list); renderVinyls();
+  const set = { format:'plaza-jam-vinyl-set', song: name, bpm: song.bpm, vinyls: pressed };
+  const blob = new Blob([JSON.stringify(set, null, 2)], { type:'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name.replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '.vinyls.json'; a.click();
+  document.getElementById('playState').textContent = '💿 Pressed ' + pressed.length + ' vinyl(s) from "' + name + '" — pattern-only, ready for the game record player. The mic vocal is not on vinyls (vinyls carry no audio).';
 };
-document.getElementById('exportSong').onclick = ()=>{
-  const s = currentSongSnapshot();
-  const blob = new Blob([JSON.stringify(s, null, 2)], { type:'application/json' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = s.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '.plaza-jam.json'; a.click();
-};
-document.getElementById('importSong').onchange = (e)=>{
+document.getElementById('importVinyl').onchange = (e)=>{
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
   r.onload = ()=>{ try {
-    const s = JSON.parse(r.result);
-    if (!s || !Array.isArray(s.sections) || !s.sections.length) throw new Error('bad file');
-    song = s; document.getElementById('songName').value = song.name || 'Imported song';
-    document.getElementById('bpm').value = song.bpm || 120; document.getElementById('bpmVal').textContent = (song.bpm || 120) + ' BPM';
-    sectionIdx = 0; renderSections(); renderGrid(); renderSaved();
-  } catch(err){ document.getElementById('playState').textContent = 'That file is not a plaza jam song.'; } };
+    const data = JSON.parse(r.result);
+    const arr = Array.isArray(data) ? data : data.vinyls;
+    if (!Array.isArray(arr)) throw new Error('bad file');
+    const good = arr.filter(validVinyl);
+    if (!good.length) throw new Error('no vinyls');
+    storeVinyls(good.concat(loadVinyls())); renderVinyls();
+    document.getElementById('playState').textContent = '💿 Imported ' + good.length + ' vinyl(s). Tap one to play it procedurally.';
+  } catch(err){ document.getElementById('playState').textContent = 'That file is not a vinyl set.'; } };
   r.readAsText(f);
 };
 document.getElementById('recVocal').onclick = async ()=>{
@@ -582,7 +653,7 @@ document.getElementById('recVocal').onclick = async ()=>{
 document.getElementById('stopVocal').onclick = ()=>{ if (mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); };
 document.getElementById('delVocal').onclick = ()=>{ curSection().vocal = null; vocalCache.delete(curSection()); renderSections(); updateVocalState(); };
 
-renderSections(); renderTrackTabs(); renderGrid(); renderSaved();
+renderSections(); renderTrackTabs(); renderGrid(); renderVinyls();
 </script>
 </body>
 </html>
