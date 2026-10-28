@@ -3,31 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Plaza Jam — Instrument Viewer</title>
+<title>Plaza Jam — Loop Studio</title>
 <style>
   body{font-family:system-ui,sans-serif;margin:0;background:#101820;color:#eef2f2}
-  header,main{max-width:960px;margin:0 auto;padding:16px}
-  #stage{width:100%;height:520px;display:block;background:#16232c;border-radius:12px;cursor:pointer}
+  header,main{max-width:1000px;margin:0 auto;padding:16px}
+  #stage{width:100%;height:460px;display:block;background:#16232c;border-radius:12px;cursor:pointer}
   .panel{background:#1b2a35;border:1px solid #2c4252;border-radius:12px;padding:14px;margin-top:12px}
-  .pads button{font-size:16px;padding:10px 16px;margin:4px;border-radius:8px;border:1px solid #3a5568;background:#24394a;color:#fff;cursor:pointer}
-  .pads button:hover{background:#314f64}
+  .pads button,.btn{font-size:16px;padding:10px 16px;margin:4px;border-radius:8px;border:1px solid #3a5568;background:#24394a;color:#fff;cursor:pointer}
+  .pads button:hover,.btn:hover{background:#314f64}
+  .btn.on{background:#e2b43f;color:#111}
   .sel{outline:3px solid #e2b43f;outline-offset:2px}
+  input[type=text]{padding:9px;border-radius:8px;border:1px solid #3a5568;background:#101820;color:#fff}
+  input[type=range]{vertical-align:middle}
+  .grid{overflow-x:auto;padding-bottom:6px}
+  .grid table{border-collapse:collapse}
+  .grid td,.grid th{border:1px solid #2c4252;padding:0;text-align:center;font-size:12px}
+  .grid th{padding:4px 6px;white-space:nowrap}
+  .cell{width:26px;height:26px;padding:0;border:0;background:#24394a;cursor:pointer;display:block}
+  .cell.on{background:#e2b43f}
+  .cell.beat{box-shadow:inset 2px 0 0 #5a7a90}
+  .cell.now{outline:2px solid #fff;outline-offset:-2px}
+  .cellrow td:first-child{padding:4px 6px;white-space:nowrap;text-align:left}
   .warn{background:#3a2a10;border:1px solid #e2b43f;border-radius:10px;padding:12px}
   code{color:#ffd796}
-  table{border-collapse:collapse} td,th{border:1px solid #2c4252;padding:6px 10px;text-align:left}
+  .small{font-size:13px;color:#b8c8d2}
 </style>
 </head>
 <body>
 <header>
-  <h1>🎵 Plaza Jam — the 7 instruments</h1>
-  <p>Click an instrument in the 3D arc, or pick one below. Then tap a note pad to hear its voice.</p>
-  <div class="warn"><strong>Flute discrepancy (read this first):</strong> in the live game,
-  <code>buildInstrument()</code> in <code>snug-jam.js</code> has branches for drum, chimes, bass, piano and harp,
-  and an <code>else</code> branch that builds a guitar — there is <strong>no flute branch</strong>.
-  So in the game today the Flute renders as a guitar and sounds like the guitar voice.
-  This viewer does <em>not</em> copy that bug: <code>flute.glb</code> here is a proper flute
-  (long thin body, mouthpiece, six finger holes, flute colour <code>#5aa9c7</code>),
-  and its voice is labelled below as the game's guitar fallback.</div>
+  <h1>🎵 Plaza Jam — Loop Studio</h1>
+  <p>Click an instrument in the 3D arc, or pick one below. Then build a song: each section is <strong>8 beats</strong> of tracks for every instrument, plus a vocal. Piece sections together, save the song, and play it back.</p>
 </header>
 <main>
   <canvas id="stage"></canvas>
@@ -37,49 +42,81 @@
     <div class="pads" id="pads"></div>
     <p id="nowPlaying" aria-live="polite"></p>
   </div>
-  <div class="panel">
-    <h2>How the jam works in the game</h2>
-    <p>In Selfie Social Society, the plaza jam spot sits just south of the festival string lights:
-    7 instruments arranged on an arc around a wooden jam mat (radius 3.4). Tapping an instrument in the
-    world opens the jam panel. Each instrument is a track with <strong>5 pentatonic pads</strong> —
-    C, D, E, G, A — at that instrument's own octave (see the table below). The sequencer walks steps
-    across the tracks, playing each track's voice at its step note. You can build a loop on the grid,
-    and when it sounds right you <strong>press it to vinyl</strong>: the record is saved and can be
-    played back on your home record player, through the same voices.</p>
-    <h3>Voices — exactly as in <code>playVoice()</code></h3>
-    <table>
-      <tr><th>Instrument</th><th>Notes (Hz)</th><th>Voice recipe</th></tr>
-      <tr><td>🥁 Drum</td><td>130.81, 146.83, 164.81, 196.00, 220.00</td><td>Sun Drum: sine, pitch drops 2×freq → 0.5×freq in 0.12s, plus a highpassed noise click</td></tr>
-      <tr><td>🎶 Chimes</td><td>523.25, 587.33, 659.25, 783.99, 880.00</td><td>Star Chimes: triangle + sine one octave up, bright pluck with shimmer</td></tr>
-      <tr><td>🎸 Bass</td><td>65.41, 73.42, 82.41, 98.00, 110.00</td><td>Moon Bass: sawtooth through a closing lowpass (420 → 140 Hz)</td></tr>
-      <tr><td>🎺 Flute</td><td>261.63, 293.66, 329.63, 392.00, 440.00</td><td><strong>Game fallback — guitar recipe</strong> (no flute voice exists in the game; flute falls into the else-branch). Labelled as an approximation, not a flute voice.</td></tr>
-      <tr><td>🎹 Piano</td><td>261.63, 293.66, 329.63, 392.00, 440.00</td><td>Bright hammered tone: triangle + two detuned (±4 cents) sines</td></tr>
-      <tr><td>🎼 Harp</td><td>523.25, 587.33, 659.25, 783.99, 880.00</td><td>Plucked shimmer: triangle through 900 Hz highpass + sine at 3×freq</td></tr>
-      <tr><td>🪕 Guitar</td><td>130.81, 146.83, 164.81, 196.00, 220.00</td><td>Plucked string body: sawtooth through a closing lowpass (2400 → 500 Hz) + short delay (0.09s) for string resonance</td></tr>
-    </table>
-  </div>
   <div class="panel" id="picker"></div>
+  <div class="panel" id="glbs"><strong>Download the .glb files:</strong> <span id="glbLinks"></span>
+  <p class="small">The drum is a full rock kit now: kick, snare, two rack toms, floor tom, hi-hat, crash and ride.</p></div>
+
+  <div class="panel" id="studio">
+    <h2>🎛️ Loop studio</h2>
+    <p>
+      Tempo: <input type="range" id="bpm" min="60" max="180" value="120"> <span id="bpmVal">120 BPM</span>
+      <span class="small">(steps are 16th notes — every tap and note snaps to the tempo grid)</span>
+    </p>
+    <p>
+      <button class="btn" id="playSection">▶ Play section</button>
+      <button class="btn" id="playSong">▶ Play song</button>
+      <button class="btn" id="stopPlay">⏹ Stop</button>
+      <button class="btn" id="recBtn">● Record taps into this section</button>
+      <span id="playState" class="small"></span>
+    </p>
+    <p>Song name: <input type="text" id="songName" value="My first song">
+      <button class="btn" id="saveSong">💾 Save song</button>
+      <button class="btn" id="exportSong">⬇ Export song file</button>
+      <label class="btn">⬆ Import song file <input type="file" id="importSong" accept=".json" hidden></label>
+    </p>
+    <p>Saved songs: <span id="savedList">— none yet —</span></p>
+    <p>Sections (8 beats each, in song order):
+      <span id="sectionList"></span>
+      <button class="btn" id="addSection">+ Section</button>
+      <button class="btn" id="dupSection">Duplicate</button>
+      <button class="btn" id="delSection">Delete</button>
+      <button class="btn" id="clearSection">Clear section</button>
+      <button class="btn" id="rockPattern">🥁 Rock drum pattern</button>
+    </p>
+    <p>Track:
+      <span id="trackTabs"></span>
+    </p>
+    <div class="grid" id="trackGrid"></div>
+    <div class="panel" id="vocalPanel" style="display:none">
+      <h3>🎤 Vocal track for this section</h3>
+      <p class="small">Records your voice for exactly one section (8 beats at the current tempo). On playback it starts with the section. Autotune snaps each snippet of your voice to the nearest note of the C-major scale.</p>
+      <p>
+        <button class="btn" id="recVocal">● Record vocal</button>
+        <button class="btn" id="stopVocal" disabled>⏹ Stop vocal</button>
+        <button class="btn" id="delVocal">Delete vocal</button>
+        <label><input type="checkbox" id="autotune" checked> Autotune</label>
+        <span id="vocalState" class="small"></span>
+      </p>
+    </div>
+  </div>
 </main>
 <script type="module">
 import * as THREE from './instruments/three.module.js';
 import { GLTFLoader } from './instruments/GLTFLoader.js';
 
+// 6 instruments — no flute (user-directed 2026-10-28).
+// track index matches the game's playVoice branches: drum 0, chimes 1, bass 2, piano 4, harp 5, guitar 6.
 const INSTRUMENTS = [
-  { id:'drum',   name:'Drum',   icon:'🥁', color:'#d95e4a', notes:[130.81,146.83,164.81,196.00,220.00], labels:['C','D','E','G','A'], voice:'Sun Drum: sine pitch drop + noise click' },
-  { id:'chimes', name:'Chimes', icon:'🎶', color:'#e2b43f', notes:[523.25,587.33,659.25,783.99,880.00], labels:['C','D','E','G','A'], voice:'Star Chimes: triangle + octave sine shimmer' },
-  { id:'bass',   name:'Bass',   icon:'🎸', color:'#7a68a6', notes:[65.41,73.42,82.41,98.00,110.00],  labels:['C','D','E','G','A'], voice:'Moon Bass: sawtooth through closing lowpass' },
-  { id:'flute',  name:'Flute',  icon:'🎺', color:'#5aa9c7', notes:[261.63,293.66,329.63,392.00,440.00], labels:['C','D','E','G','A'], voice:'Game fallback — guitar recipe (no flute voice exists in the game)' },
-  { id:'piano',  name:'Piano',  icon:'🎹', color:'#2f2f3d', notes:[261.63,293.66,329.63,392.00,440.00], labels:['C','D','E','G','A'], voice:'Piano: bright hammered triangle + detuned sines' },
-  { id:'harp',   name:'Harp',   icon:'🎼', color:'#ddd6c2', notes:[523.25,587.33,659.25,783.99,880.00], labels:['C','D','E','G','A'], voice:'Harp: plucked shimmer, triangle + 3x sine' },
-  { id:'guitar', name:'Guitar', icon:'🪕', color:'#9c6b3d', notes:[130.81,146.83,164.81,196.00,220.00], labels:['C','D','E','G','A'], voice:'Guitar: sawtooth through closing lowpass + short delay' },
+  { id:'drum',   name:'Drum kit', icon:'🥁', color:'#d95e4a', voice:'Rock kit: kick, snare, hi-hat, toms, crash, ride' },
+  { id:'chimes', name:'Chimes', icon:'🎶', color:'#e2b43f', base:72, voice:'Star Chimes: triangle + octave sine shimmer' },
+  { id:'bass',   name:'Bass',   icon:'🎸', color:'#7a68a6', base:36, voice:'Moon Bass: sawtooth through closing lowpass' },
+  { id:'piano',  name:'Piano',  icon:'🎹', color:'#2f2f3d', base:60, voice:'Piano: bright hammered triangle + detuned sines' },
+  { id:'harp',   name:'Harp',   icon:'🎼', color:'#ddd6c2', base:72, voice:'Harp: plucked shimmer, triangle + 3x sine' },
+  { id:'guitar', name:'Guitar', icon:'🪕', color:'#9c6b3d', base:48, voice:'Guitar: sawtooth through closing lowpass + short delay' },
 ];
+const MELODIC = INSTRUMENTS.filter(i=>i.id!=='drum');
+const SCALE_DEGREES = [0,2,4,5,7,9,11,12,14,16,17,19,21,23,24]; // C major, 2 octaves
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+function midiName(m){ return NOTE_NAMES[m%12] + (Math.floor(m/12)-1); }
+function midiFreq(m){ return 440*Math.pow(2,(m-69)/12); }
+function scaleNotes(inst){ return SCALE_DEGREES.map(d=>({ midi: inst.base+d, name: midiName(inst.base+d), freq: midiFreq(inst.base+d) })); }
 
-// ---- WebAudio voices, ported from snug-jam.js playVoice ----
+// ---- WebAudio voices, ported from snug-jam.js playVoice (with a `when` time for scheduled playback) ----
 let actx = null, bus = null, noiseBuf = null;
 function ensureCtx(){
   if (!actx){ actx = new (window.AudioContext||window.webkitAudioContext)();
     bus = actx.createGain(); bus.gain.value = 0.9; bus.connect(actx.destination);
-    noiseBuf = actx.createBuffer(1, actx.sampleRate*0.03, actx.sampleRate);
+    noiseBuf = actx.createBuffer(1, actx.sampleRate*1, actx.sampleRate);
     const d = noiseBuf.getChannelData(0); for (let i=0;i<d.length;i++) d[i]=Math.random()*2-1; }
   if (actx.state==='suspended') actx.resume();
   return actx;
@@ -89,8 +126,8 @@ function env(g, t, vol, dur, atk=0.004){
   g.gain.exponentialRampToValueAtTime(Math.min(0.6, vol), t+atk);
   g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
 }
-function playVoice(track, freq, vol=0.5){
-  const ctx = ensureCtx(), t = ctx.currentTime + 0.01, dest = bus;
+function playVoice(track, freq, vol=0.5, when=null){
+  const ctx = ensureCtx(), t = when!==null ? when : ctx.currentTime + 0.01, dest = bus;
   if (track===0){
     const o=ctx.createOscillator(), g=ctx.createGain(); o.type='sine';
     o.frequency.setValueAtTime(freq*2, t);
@@ -122,7 +159,7 @@ function playVoice(track, freq, vol=0.5){
     const o2=ctx.createOscillator(), g2=ctx.createGain();
     o2.type='sine'; o2.frequency.setValueAtTime(freq*3,t);
     env(g2,t,vol*0.25,0.4,0.003); o2.connect(g2); g2.connect(dest); o2.start(t); o2.stop(t+0.45);
-  } else { // guitar — and the game's flute fallback (track 3 has no branch)
+  } else { // guitar (and the old flute fallback branch)
     const o=ctx.createOscillator(), f=ctx.createBiquadFilter(), g=ctx.createGain();
     o.type='sawtooth'; o.frequency.setValueAtTime(freq,t); f.type='lowpass'; f.Q.value=1.5;
     f.frequency.setValueAtTime(2400,t); f.frequency.exponentialRampToValueAtTime(500,t+0.35);
@@ -134,8 +171,29 @@ function playVoice(track, freq, vol=0.5){
     o.start(t); o.stop(t+0.7);
   }
 }
+// Drum kit voices (scheduled, for the sequencer + kit pads).
+function drumVoice(piece, when=null, vol=0.6){
+  const ctx = ensureCtx(), t = when!==null ? when : ctx.currentTime + 0.01, dest = bus;
+  function noiseThrough(type, freq, dur, v){
+    const n=ctx.createBufferSource(); n.buffer=noiseBuf;
+    const f=ctx.createBiquadFilter(); f.type=type; f.frequency.value=freq;
+    const g=ctx.createGain(); env(g, t, v, dur, 0.002);
+    n.connect(f); f.connect(g); g.connect(dest); n.start(t); n.stop(t+dur+0.05);
+  }
+  function tone(f0, f1, dur, v, type='sine'){
+    const o=ctx.createOscillator(), g=ctx.createGain(); o.type=type;
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t+dur*0.6);
+    env(g, t, v, dur, 0.002); o.connect(g); g.connect(dest); o.start(t); o.stop(t+dur+0.05);
+  }
+  if (piece==='kick') tone(150, 40, 0.28, vol);
+  else if (piece==='snare'){ noiseThrough('bandpass', 1800, 0.18, vol*0.8); tone(190, 140, 0.12, vol*0.5, 'triangle'); }
+  else if (piece==='hat') noiseThrough('highpass', 8000, 0.05, vol*0.5);
+  else if (piece==='tom') tone(200, 90, 0.3, vol);
+  else if (piece==='crash') noiseThrough('highpass', 5000, 0.9, vol*0.6);
+}
+const TRACK_INDEX = { chimes:1, bass:2, piano:4, harp:5, guitar:6 };
 
-// ---- 3D scene: jam mat + 7 instruments on the game's arc ----
+// ---- 3D scene: jam mat + 6 instruments on the arc ----
 const canvas = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
 renderer.setPixelRatio(Math.min(2, devicePixelRatio||1));
@@ -159,6 +217,14 @@ ring.rotation.x = Math.PI/2; ring.position.y = 0.09; scene.add(ring);
 const loader = new GLTFLoader();
 const groups = [], pickMeshes = [];
 let selected = -1, highlight = null;
+const DRUM_PIECES = ['kick','snare','hat','tom','crash'];
+const DRUM_LABELS = { kick:'Kick', snare:'Snare', hat:'Hi-hat', tom:'Tom', crash:'Crash' };
+function padTap(inst, arg){
+  // Live taps: play now AND, while recording, quantize into the current section.
+  if (inst.id==='drum') drumVoice(arg); else playVoice(TRACK_INDEX[inst.id], arg.freq);
+  if (recording) recordTap(inst, arg);
+  document.getElementById('nowPlaying').textContent = 'Playing ' + inst.name + ' — ' + (inst.id==='drum' ? DRUM_LABELS[arg] : arg.name);
+}
 function select(i){
   selected = i;
   const inst = INSTRUMENTS[i];
@@ -166,13 +232,18 @@ function select(i){
   document.getElementById('instVoice').textContent = 'Voice: ' + inst.voice;
   document.getElementById('nowPlaying').textContent = '';
   const pads = document.getElementById('pads'); pads.innerHTML = '';
-  inst.notes.forEach((f, n)=>{
-    const b = document.createElement('button');
-    b.textContent = inst.labels[n] + ' · ' + f.toFixed(2) + ' Hz';
-    b.onclick = ()=>{ playVoice(i, f, 0.5);
-      document.getElementById('nowPlaying').textContent = 'Playing ' + inst.name + ' ' + inst.labels[n] + ' (' + f.toFixed(2) + ' Hz) — ' + inst.voice; };
-    pads.appendChild(b);
-  });
+  if (inst.id==='drum'){
+    DRUM_PIECES.forEach(p=>{
+      const b = document.createElement('button'); b.textContent = DRUM_LABELS[p];
+      b.onclick = ()=> padTap(inst, p); pads.appendChild(b);
+    });
+  } else {
+    // Quick pads: one full C-major octave — more notes than the old 5 pentatonic pads.
+    scaleNotes(inst).filter((n,ix)=>[0,1,2,3,4,5,6,7].includes(ix)).forEach(n=>{
+      const b = document.createElement('button'); b.textContent = n.name + ' · ' + n.freq.toFixed(2) + ' Hz';
+      b.onclick = ()=> padTap(inst, n); pads.appendChild(b);
+    });
+  }
   if (highlight) scene.remove(highlight);
   highlight = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.04, 8, 40),
     new THREE.MeshStandardMaterial({ color:0xe2b43f, emissive:0xe2b43f, emissiveIntensity:0.6 }));
@@ -182,7 +253,7 @@ function select(i){
   document.querySelectorAll('#picker button').forEach((b, j)=> b.classList.toggle('sel', j===i));
 }
 INSTRUMENTS.forEach((inst, i)=>{
-  const a = (i - 3) * 0.42; // game's arc: (i-(TRACKS-1)/2)*0.42
+  const a = (i - (INSTRUMENTS.length-1)/2) * 0.42;
   const x = 2.8 * Math.sin(a), z = 2.8 * Math.cos(a);
   const g = new THREE.Group(); g.position.set(x, 0.07, z);
   g.rotation.y = Math.atan2(-x, -z);
@@ -196,6 +267,9 @@ INSTRUMENTS.forEach((inst, i)=>{
   b.style.borderRadius = '8px'; b.style.cursor = 'pointer';
   b.onclick = ()=> select(i);
   document.getElementById('picker').appendChild(b);
+  const a2 = document.createElement('a'); a2.href = './instruments/' + inst.id + '.glb'; a2.download = inst.id + '.glb';
+  a2.textContent = inst.icon + ' ' + inst.name + '.glb'; a2.style.margin = '0 8px';
+  document.getElementById('glbLinks').appendChild(a2);
 });
 const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
 canvas.addEventListener('pointerdown', (e)=>{
@@ -213,6 +287,302 @@ function resize(){
 new ResizeObserver(resize).observe(canvas); resize();
 renderer.setAnimationLoop(()=> renderer.render(scene, camera));
 select(0);
+
+// ---- Song model: sections of 8 beats (32 sixteenth steps), each full of tracks ----
+const STEPS = 32; // 8 beats x 4 sixteenths
+function newSection(name){
+  const s = { name, drums: {}, tracks: {}, vocal: null };
+  DRUM_PIECES.forEach(p=> s.drums[p] = []);
+  MELODIC.forEach(i=> s.tracks[i.id] = []);
+  return s;
+}
+let song = { name:'My first song', bpm:120, sections:[newSection('Section 1')] };
+let sectionIdx = 0, trackTab = 'drums'; // trackTab: 'drums' | instrument id | 'vocal'
+let recording = false;
+function curSection(){ return song.sections[sectionIdx]; }
+function bpm(){ return song.bpm; }
+function stepDur(){ return 60/bpm()/4; }
+function sectionDur(){ return STEPS*stepDur(); }
+
+function renderSections(){
+  const el = document.getElementById('sectionList'); el.innerHTML = '';
+  song.sections.forEach((s, i)=>{
+    const b = document.createElement('button'); b.className = 'btn' + (i===sectionIdx ? ' on' : '');
+    b.textContent = (i+1) + '. ' + s.name + (s.vocal ? ' 🎤' : '');
+    b.onclick = ()=>{ sectionIdx = i; renderSections(); renderGrid(); };
+    el.appendChild(b);
+  });
+}
+function renderTrackTabs(){
+  const el = document.getElementById('trackTabs'); el.innerHTML = '';
+  ['drums'].concat(MELODIC.map(i=>i.id)).concat(['vocal']).forEach(t=>{
+    const b = document.createElement('button'); b.className = 'btn' + (t===trackTab ? ' on' : '');
+    b.textContent = t==='drums' ? '🥁 Drums' : t==='vocal' ? '🎤 Vocal' : INSTRUMENTS.find(i=>i.id===t).name;
+    b.onclick = ()=>{ trackTab = t; renderTrackTabs(); renderGrid(); };
+    el.appendChild(b);
+  });
+}
+function renderGrid(){
+  const sec = curSection(), wrap = document.getElementById('trackGrid');
+  document.getElementById('vocalPanel').style.display = trackTab==='vocal' ? 'block' : 'none';
+  if (trackTab==='vocal'){ wrap.innerHTML = '<p class="small">Use the vocal panel below to record a voice track for this section. It plays back in sync with the section, autotuned if that box is ticked.</p>'; updateVocalState(); return; }
+  let html = '<table><tr><th></th>';
+  for (let s=0;s<STEPS;s++) html += '<th>' + (s%4===0 ? (Math.floor(s/4)+1) : '') + '</th>';
+  html += '</tr>';
+  if (trackTab==='drums'){
+    DRUM_PIECES.forEach(p=>{
+      html += '<tr class="cellrow"><td>' + DRUM_LABELS[p] + '</td>';
+      for (let s=0;s<STEPS;s++){
+        const on = sec.drums[p].includes(s);
+        html += '<td><button class="cell' + (on?' on':'') + (s%4===0?' beat':'') + '" data-piece="' + p + '" data-step="' + s + '"></button></td>';
+      }
+      html += '</tr>';
+    });
+  } else {
+    const inst = INSTRUMENTS.find(i=>i.id===trackTab), notes = scaleNotes(inst);
+    for (let n=notes.length-1; n>=0; n--){
+      html += '<tr class="cellrow"><td>' + notes[n].name + '</td>';
+      for (let s=0;s<STEPS;s++){
+        const on = sec.tracks[trackTab].some(c=>c.s===s && c.n===n);
+        html += '<td><button class="cell' + (on?' on':'') + (s%4===0?' beat':'') + '" data-note="' + n + '" data-step="' + s + '"></button></td>';
+      }
+      html += '</tr>';
+    }
+  }
+  html += '</table>';
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('.cell').forEach(btn=>{
+    btn.onclick = ()=>{
+      const s = +btn.dataset.step;
+      if (trackTab==='drums'){
+        const p = btn.dataset.piece, arr = sec.drums[p];
+        const ix = arr.indexOf(s); if (ix>=0) arr.splice(ix,1); else arr.push(s);
+      } else {
+        const n = +btn.dataset.note, arr = sec.tracks[trackTab];
+        const ix = arr.findIndex(c=>c.s===s && c.n===n);
+        if (ix>=0) arr.splice(ix,1); else arr.push({ s, n });
+      }
+      renderGrid();
+    };
+  });
+}
+function recordTap(inst, arg){
+  // Quantize a live tap to the nearest 16th step of the section now playing.
+  if (!playState.playing || playState.sectionStartTime===null) return;
+  ensureCtx();
+  const sec = song.sections[playState.sectionIdx];
+  const stepFloat = (actx.currentTime - playState.sectionStartTime)/stepDur();
+  const step = ((Math.round(stepFloat) % STEPS) + STEPS) % STEPS;
+  if (inst.id==='drum'){ if (!sec.drums[arg].includes(step)) sec.drums[arg].push(step); }
+  else {
+    const notes = scaleNotes(inst);
+    const n = notes.findIndex(x=>x.midi===arg.midi);
+    if (n>=0 && !sec.tracks[inst.id].some(c=>c.s===step && c.n===n)) sec.tracks[inst.id].push({ s:step, n });
+  }
+  if (playState.sectionIdx===sectionIdx) renderGrid();
+}
+
+// ---- Playback: lookahead scheduler, quantized to the tempo ----
+const playState = { playing:false, mode:'section', sectionIdx:0, step:0, nextTime:0, timer:null, sectionStartTime:null };
+function playStepSounds(sec, step, t){
+  DRUM_PIECES.forEach(p=>{ if (sec.drums[p].includes(step)) drumVoice(p, t); });
+  MELODIC.forEach(inst=>{
+    const notes = scaleNotes(inst);
+    sec.tracks[inst.id].filter(c=>c.s===step).forEach(c=> playVoice(TRACK_INDEX[inst.id], notes[c.n].freq, 0.5, t));
+  });
+  // Step highlight (approximate, via timeout to the step's audio time).
+  const delay = Math.max(0, (t - actx.currentTime)*1000);
+  setTimeout(()=>{
+    document.querySelectorAll('#trackGrid .cell').forEach(el=> el.classList.toggle('now', +el.dataset.step===step));
+  }, delay);
+}
+function scheduleVocal(sec, t){
+  if (!sec.vocal) return;
+  if (document.getElementById('autotune').checked) playAutotuned(sec, t);
+  else {
+    ensureCtx();
+    fetch(sec.vocal).then(r=>r.arrayBuffer()).then(buf=> actx.decodeAudioData(buf)).then(audio=>{
+      const src = actx.createBufferSource(); src.buffer = audio; src.connect(bus); src.start(t);
+    }).catch(()=>{});
+  }
+}
+function tick(){
+  if (!playState.playing) return;
+  ensureCtx();
+  while (playState.nextTime < actx.currentTime + 0.12){
+    const sec = song.sections[playState.sectionIdx];
+    if (playState.step===0){
+      playState.sectionStartTime = playState.nextTime;
+      scheduleVocal(sec, playState.nextTime);
+    }
+    playStepSounds(sec, playState.step, playState.nextTime);
+    playState.nextTime += stepDur();
+    playState.step++;
+    if (playState.step >= STEPS){
+      playState.step = 0;
+      if (playState.mode==='song'){
+        playState.sectionIdx = (playState.sectionIdx+1) % song.sections.length;
+        if (playState.sectionIdx===sectionIdx) { /* keep editing view in sync */ }
+      }
+    }
+  }
+}
+function startPlay(mode){
+  ensureCtx(); stopPlay(false);
+  playState.playing = true; playState.mode = mode;
+  playState.sectionIdx = mode==='song' ? 0 : sectionIdx;
+  playState.step = 0; playState.nextTime = actx.currentTime + 0.06; playState.sectionStartTime = null;
+  playState.timer = setInterval(tick, 25);
+  document.getElementById('playState').textContent = mode==='song' ? '▶ Playing song: ' + song.name : '▶ Playing section: ' + curSection().name;
+}
+function stopPlay(updateLabel=true){
+  playState.playing = false;
+  if (playState.timer){ clearInterval(playState.timer); playState.timer = null; }
+  document.querySelectorAll('#trackGrid .cell').forEach(el=> el.classList.remove('now'));
+  if (updateLabel) document.getElementById('playState').textContent = '';
+}
+
+// ---- Vocal: record with the mic, autotune by snapping grains to C major ----
+let mediaRecorder = null, vocalChunks = [], vocalStream = null;
+function updateVocalState(){
+  const sec = curSection();
+  document.getElementById('vocalState').textContent = sec.vocal ? '🎤 Vocal recorded for this section (' + (sec.vocal.length>1000 ? Math.round(sec.vocal.length/1024) + ' KB' : sec.vocal.length + ' chars') + '). It plays with the section.' : 'No vocal on this section yet.';
+}
+function estimatePitch(samples, sampleRate){
+  // Simple autocorrelation pitch estimate; returns Hz or null if unvoiced/quiet.
+  let rms = 0; for (let i=0;i<samples.length;i++) rms += samples[i]*samples[i];
+  rms = Math.sqrt(rms/samples.length); if (rms < 0.02) return null;
+  let bestLag = -1, bestCorr = 0;
+  for (let lag=Math.floor(sampleRate/600); lag<=Math.floor(sampleRate/60); lag++){
+    let corr = 0; for (let i=0;i<samples.length-lag;i++) corr += samples[i]*samples[i+lag];
+    corr /= (samples.length-lag);
+    if (corr > bestCorr){ bestCorr = corr; bestLag = lag; }
+  }
+  if (bestLag < 0 || bestCorr < rms*rms*0.5) return null;
+  return sampleRate/bestLag;
+}
+function snapToCMajor(freq){
+  // Nearest C-major note (any octave) to the detected pitch.
+  const midi = 69 + 12*Math.log2(freq/440);
+  const degrees = [0,2,4,5,7,9,11];
+  let best = null;
+  for (let m=48; m<=84; m++){
+    if (!degrees.includes(((m%12)+12)%12)) continue;
+    const d = Math.abs(m - midi); if (best===null || d < best.d){ best = { m, d }; }
+  }
+  return midiFreq(best.m);
+}
+const vocalCache = new Map();
+function playAutotuned(sec, t0){
+  ensureCtx();
+  const cached = vocalCache.get(sec);
+  const go = (audio)=>{
+    const ch = audio.getChannelData(0), sr = audio.sampleRate, grain = 0.09, grainSamples = Math.floor(sr*grain);
+    for (let g=0, gt=0; g* grainSamples < ch.length; g++, gt+=grain){
+      const seg = ch.slice(g*grainSamples, (g+1)*grainSamples);
+      const f = estimatePitch(seg, sr);
+      const src = actx.createBufferSource(); src.buffer = audio;
+      src.playbackRate.value = f ? snapToCMajor(f)/f : 1;
+      src.connect(bus); src.start(t0+gt, g*grain, grain);
+      src.stop(t0+gt+grain);
+    }
+  };
+  if (cached) go(cached);
+  else fetch(sec.vocal).then(r=>r.arrayBuffer()).then(buf=> actx.decodeAudioData(buf)).then(audio=>{ vocalCache.set(sec, audio); go(audio); }).catch(()=>{});
+}
+
+// ---- Songs saved: this device (localStorage) + export/import files ----
+const LS_KEY = 'plaza-jam-songs-v1';
+function loadSaved(){ try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch(e){ return []; } }
+function renderSaved(){
+  const list = loadSaved(), el = document.getElementById('savedList'); el.innerHTML = '';
+  if (!list.length){ el.textContent = '— none yet —'; return; }
+  list.forEach((s, i)=>{
+    const b = document.createElement('button'); b.className = 'btn'; b.textContent = '▶ ' + s.name + ' (' + s.sections.length + ' sections, ' + s.bpm + ' BPM)';
+    b.onclick = ()=>{ song = JSON.parse(JSON.stringify(s)); document.getElementById('songName').value = song.name; document.getElementById('bpm').value = song.bpm; document.getElementById('bpmVal').textContent = song.bpm + ' BPM'; sectionIdx = 0; renderSections(); renderGrid(); };
+    const d = document.createElement('button'); d.className = 'btn'; d.textContent = '✕';
+    d.onclick = ()=>{ const l = loadSaved(); l.splice(i,1); localStorage.setItem(LS_KEY, JSON.stringify(l)); renderSaved(); };
+    el.appendChild(b); el.appendChild(d);
+  });
+}
+function currentSongSnapshot(){
+  const s = JSON.parse(JSON.stringify(song)); s.name = document.getElementById('songName').value || 'Untitled song'; return s;
+}
+
+// ---- Wiring ----
+document.getElementById('bpm').oninput = (e)=>{ song.bpm = +e.target.value; document.getElementById('bpmVal').textContent = song.bpm + ' BPM'; };
+document.getElementById('playSection').onclick = ()=> startPlay('section');
+document.getElementById('playSong').onclick = ()=> startPlay('song');
+document.getElementById('stopPlay').onclick = ()=> stopPlay();
+document.getElementById('recBtn').onclick = (e)=>{
+  recording = !recording; e.target.classList.toggle('on', recording);
+  e.target.textContent = recording ? '● Recording taps — play a section or the song' : '● Record taps into this section';
+  if (recording && !playState.playing) startPlay('section');
+};
+document.getElementById('addSection').onclick = ()=>{ song.sections.push(newSection('Section ' + (song.sections.length+1))); sectionIdx = song.sections.length-1; renderSections(); renderGrid(); };
+document.getElementById('dupSection').onclick = ()=>{ song.sections.splice(sectionIdx+1, 0, JSON.parse(JSON.stringify(curSection()))); sectionIdx++; renderSections(); renderGrid(); };
+document.getElementById('delSection').onclick = ()=>{ if (song.sections.length>1){ song.sections.splice(sectionIdx,1); sectionIdx = Math.max(0, sectionIdx-1); renderSections(); renderGrid(); } };
+document.getElementById('clearSection').onclick = ()=>{ song.sections[sectionIdx] = newSection(curSection().name); renderGrid(); };
+document.getElementById('rockPattern').onclick = ()=>{
+  const d = curSection().drums;
+  DRUM_PIECES.forEach(p=> d[p] = []);
+  [0,8,16,24].forEach(s=> d.kick.push(s)); [4,12,20,28].forEach(s=> d.snare.push(s));
+  for (let s=0;s<STEPS;s+=2) d.hat.push(s);
+  [0,16].forEach(s=> d.crash.push(s));
+  renderGrid();
+};
+document.getElementById('saveSong').onclick = ()=>{
+  const s = currentSongSnapshot(), list = loadSaved();
+  const ix = list.findIndex(x=>x.name===s.name); if (ix>=0) list[ix] = s; else list.push(s);
+  localStorage.setItem(LS_KEY, JSON.stringify(list)); renderSaved();
+  document.getElementById('playState').textContent = '💾 Saved "' + s.name + '" on this device (' + s.sections.length + ' sections).';
+};
+document.getElementById('exportSong').onclick = ()=>{
+  const s = currentSongSnapshot();
+  const blob = new Blob([JSON.stringify(s, null, 2)], { type:'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = s.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '.plaza-jam.json'; a.click();
+};
+document.getElementById('importSong').onchange = (e)=>{
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = ()=>{ try {
+    const s = JSON.parse(r.result);
+    if (!s || !Array.isArray(s.sections) || !s.sections.length) throw new Error('bad file');
+    song = s; document.getElementById('songName').value = song.name || 'Imported song';
+    document.getElementById('bpm').value = song.bpm || 120; document.getElementById('bpmVal').textContent = (song.bpm || 120) + ' BPM';
+    sectionIdx = 0; renderSections(); renderGrid(); renderSaved();
+  } catch(err){ document.getElementById('playState').textContent = 'That file is not a plaza jam song.'; } };
+  r.readAsText(f);
+};
+document.getElementById('recVocal').onclick = async ()=>{
+  try {
+    ensureCtx();
+    vocalStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    vocalChunks = [];
+    mediaRecorder = new MediaRecorder(vocalStream);
+    mediaRecorder.ondataavailable = (e)=>{ if (e.data.size) vocalChunks.push(e.data); };
+    mediaRecorder.onstop = ()=>{
+      const blob = new Blob(vocalChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      const rd = new FileReader();
+      rd.onload = ()=>{ curSection().vocal = rd.result; vocalCache.delete(curSection()); renderSections(); updateVocalState(); };
+      rd.readAsDataURL(blob);
+      vocalStream.getTracks().forEach(t=>t.stop());
+      document.getElementById('recVocal').disabled = false; document.getElementById('stopVocal').disabled = true;
+      document.getElementById('vocalState').textContent = 'Vocal saved into this section.';
+    };
+    mediaRecorder.start();
+    document.getElementById('recVocal').disabled = true; document.getElementById('stopVocal').disabled = false;
+    document.getElementById('vocalState').textContent = '● Recording your voice… tap Stop vocal when done (recording stops by itself at the end of one section if you keep singing).';
+    // Auto-stop at one section length so the vocal always fits the section.
+    setTimeout(()=>{ if (mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); }, sectionDur()*1000 + 200);
+  } catch(err){
+    document.getElementById('vocalState').textContent = 'Mic not available: ' + (err && err.message ? err.message : 'permission denied') + '. On a phone, open this page over https and allow the mic.';
+  }
+};
+document.getElementById('stopVocal').onclick = ()=>{ if (mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); };
+document.getElementById('delVocal').onclick = ()=>{ curSection().vocal = null; vocalCache.delete(curSection()); renderSections(); updateVocalState(); };
+
+renderSections(); renderTrackTabs(); renderGrid(); renderSaved();
 </script>
 </body>
 </html>
