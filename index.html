@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plaza Jam — Instrument Viewer</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#101820;color:#eef2f2}
+  header,main{max-width:960px;margin:0 auto;padding:16px}
+  #stage{width:100%;height:520px;display:block;background:#16232c;border-radius:12px;cursor:pointer}
+  .panel{background:#1b2a35;border:1px solid #2c4252;border-radius:12px;padding:14px;margin-top:12px}
+  .pads button{font-size:16px;padding:10px 16px;margin:4px;border-radius:8px;border:1px solid #3a5568;background:#24394a;color:#fff;cursor:pointer}
+  .pads button:hover{background:#314f64}
+  .sel{outline:3px solid #e2b43f;outline-offset:2px}
+  .warn{background:#3a2a10;border:1px solid #e2b43f;border-radius:10px;padding:12px}
+  code{color:#ffd796}
+  table{border-collapse:collapse} td,th{border:1px solid #2c4252;padding:6px 10px;text-align:left}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 Plaza Jam — the 7 instruments</h1>
+  <p>Click an instrument in the 3D arc, or pick one below. Then tap a note pad to hear its voice.</p>
+  <div class="warn"><strong>Flute discrepancy (read this first):</strong> in the live game,
+  <code>buildInstrument()</code> in <code>snug-jam.js</code> has branches for drum, chimes, bass, piano and harp,
+  and an <code>else</code> branch that builds a guitar — there is <strong>no flute branch</strong>.
+  So in the game today the Flute renders as a guitar and sounds like the guitar voice.
+  This viewer does <em>not</em> copy that bug: <code>flute.glb</code> here is a proper flute
+  (long thin body, mouthpiece, six finger holes, flute colour <code>#5aa9c7</code>),
+  and its voice is labelled below as the game's guitar fallback.</div>
+</header>
+<main>
+  <canvas id="stage"></canvas>
+  <div class="panel" id="info">
+    <h2 id="instName">Pick an instrument</h2>
+    <p id="instVoice">—</p>
+    <div class="pads" id="pads"></div>
+    <p id="nowPlaying" aria-live="polite"></p>
+  </div>
+  <div class="panel">
+    <h2>How the jam works in the game</h2>
+    <p>In Selfie Social Society, the plaza jam spot sits just south of the festival string lights:
+    7 instruments arranged on an arc around a wooden jam mat (radius 3.4). Tapping an instrument in the
+    world opens the jam panel. Each instrument is a track with <strong>5 pentatonic pads</strong> —
+    C, D, E, G, A — at that instrument's own octave (see the table below). The sequencer walks steps
+    across the tracks, playing each track's voice at its step note. You can build a loop on the grid,
+    and when it sounds right you <strong>press it to vinyl</strong>: the record is saved and can be
+    played back on your home record player, through the same voices.</p>
+    <h3>Voices — exactly as in <code>playVoice()</code></h3>
+    <table>
+      <tr><th>Instrument</th><th>Notes (Hz)</th><th>Voice recipe</th></tr>
+      <tr><td>🥁 Drum</td><td>130.81, 146.83, 164.81, 196.00, 220.00</td><td>Sun Drum: sine, pitch drops 2×freq → 0.5×freq in 0.12s, plus a highpassed noise click</td></tr>
+      <tr><td>🎶 Chimes</td><td>523.25, 587.33, 659.25, 783.99, 880.00</td><td>Star Chimes: triangle + sine one octave up, bright pluck with shimmer</td></tr>
+      <tr><td>🎸 Bass</td><td>65.41, 73.42, 82.41, 98.00, 110.00</td><td>Moon Bass: sawtooth through a closing lowpass (420 → 140 Hz)</td></tr>
+      <tr><td>🎺 Flute</td><td>261.63, 293.66, 329.63, 392.00, 440.00</td><td><strong>Game fallback — guitar recipe</strong> (no flute voice exists in the game; flute falls into the else-branch). Labelled as an approximation, not a flute voice.</td></tr>
+      <tr><td>🎹 Piano</td><td>261.63, 293.66, 329.63, 392.00, 440.00</td><td>Bright hammered tone: triangle + two detuned (±4 cents) sines</td></tr>
+      <tr><td>🎼 Harp</td><td>523.25, 587.33, 659.25, 783.99, 880.00</td><td>Plucked shimmer: triangle through 900 Hz highpass + sine at 3×freq</td></tr>
+      <tr><td>🪕 Guitar</td><td>130.81, 146.83, 164.81, 196.00, 220.00</td><td>Plucked string body: sawtooth through a closing lowpass (2400 → 500 Hz) + short delay (0.09s) for string resonance</td></tr>
+    </table>
+  </div>
+  <div class="panel" id="picker"></div>
+</main>
+<script type="module">
+import * as THREE from './instruments/three.module.js';
+import { GLTFLoader } from './instruments/GLTFLoader.js';
+
+const INSTRUMENTS = [
+  { id:'drum',   name:'Drum',   icon:'🥁', color:'#d95e4a', notes:[130.81,146.83,164.81,196.00,220.00], labels:['C','D','E','G','A'], voice:'Sun Drum: sine pitch drop + noise click' },
+  { id:'chimes', name:'Chimes', icon:'🎶', color:'#e2b43f', notes:[523.25,587.33,659.25,783.99,880.00], labels:['C','D','E','G','A'], voice:'Star Chimes: triangle + octave sine shimmer' },
+  { id:'bass',   name:'Bass',   icon:'🎸', color:'#7a68a6', notes:[65.41,73.42,82.41,98.00,110.00],  labels:['C','D','E','G','A'], voice:'Moon Bass: sawtooth through closing lowpass' },
+  { id:'flute',  name:'Flute',  icon:'🎺', color:'#5aa9c7', notes:[261.63,293.66,329.63,392.00,440.00], labels:['C','D','E','G','A'], voice:'Game fallback — guitar recipe (no flute voice exists in the game)' },
+  { id:'piano',  name:'Piano',  icon:'🎹', color:'#2f2f3d', notes:[261.63,293.66,329.63,392.00,440.00], labels:['C','D','E','G','A'], voice:'Piano: bright hammered triangle + detuned sines' },
+  { id:'harp',   name:'Harp',   icon:'🎼', color:'#ddd6c2', notes:[523.25,587.33,659.25,783.99,880.00], labels:['C','D','E','G','A'], voice:'Harp: plucked shimmer, triangle + 3x sine' },
+  { id:'guitar', name:'Guitar', icon:'🪕', color:'#9c6b3d', notes:[130.81,146.83,164.81,196.00,220.00], labels:['C','D','E','G','A'], voice:'Guitar: sawtooth through closing lowpass + short delay' },
+];
+
+// ---- WebAudio voices, ported from snug-jam.js playVoice ----
+let actx = null, bus = null, noiseBuf = null;
+function ensureCtx(){
+  if (!actx){ actx = new (window.AudioContext||window.webkitAudioContext)();
+    bus = actx.createGain(); bus.gain.value = 0.9; bus.connect(actx.destination);
+    noiseBuf = actx.createBuffer(1, actx.sampleRate*0.03, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i=0;i<d.length;i++) d[i]=Math.random()*2-1; }
+  if (actx.state==='suspended') actx.resume();
+  return actx;
+}
+function env(g, t, vol, dur, atk=0.004){
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.min(0.6, vol), t+atk);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+}
+function playVoice(track, freq, vol=0.5){
+  const ctx = ensureCtx(), t = ctx.currentTime + 0.01, dest = bus;
+  if (track===0){
+    const o=ctx.createOscillator(), g=ctx.createGain(); o.type='sine';
+    o.frequency.setValueAtTime(freq*2, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(30, freq*0.5), t+0.12);
+    env(g, t, vol, 0.28); o.connect(g); g.connect(dest); o.start(t); o.stop(t+0.3);
+    const n=ctx.createBufferSource(); n.buffer=noiseBuf;
+    const nf=ctx.createBiquadFilter(); nf.type='highpass'; nf.frequency.value=2500;
+    const ng=ctx.createGain(); ng.gain.setValueAtTime(vol*0.5, t);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t+0.03);
+    n.connect(nf); nf.connect(ng); ng.connect(dest); n.start(t); n.stop(t+0.04);
+  } else if (track===1){
+    [[freq,'triangle',vol,0.5],[freq*2,'sine',vol*0.35,0.32]].forEach(([f,type,v,dur])=>{
+      const o=ctx.createOscillator(), g=ctx.createGain(); o.type=type; o.frequency.setValueAtTime(f,t);
+      env(g,t,v,dur,0.005); o.connect(g); g.connect(dest); o.start(t); o.stop(t+dur+0.02); });
+  } else if (track===2){
+    const o=ctx.createOscillator(), f=ctx.createBiquadFilter(), g=ctx.createGain();
+    o.type='sawtooth'; o.frequency.setValueAtTime(freq,t); f.type='lowpass'; f.Q.value=2;
+    f.frequency.setValueAtTime(420,t); f.frequency.exponentialRampToValueAtTime(140,t+0.4);
+    env(g,t,vol,0.5,0.01); o.connect(f); f.connect(g); g.connect(dest); o.start(t); o.stop(t+0.55);
+  } else if (track===4){
+    [[0,'triangle',vol,0.9],[4,'sine',vol*0.4,0.5],[-4,'sine',vol*0.4,0.5]].forEach(([cents,type,v,dur])=>{
+      const o=ctx.createOscillator(), g=ctx.createGain(); o.type=type;
+      o.frequency.setValueAtTime(freq,t); o.detune.setValueAtTime(cents,t);
+      env(g,t,v,dur); o.connect(g); g.connect(dest); o.start(t); o.stop(t+dur+0.02); });
+  } else if (track===5){
+    const o=ctx.createOscillator(), f=ctx.createBiquadFilter(), g=ctx.createGain();
+    o.type='triangle'; o.frequency.setValueAtTime(freq,t); f.type='highpass'; f.frequency.value=900;
+    env(g,t,vol,0.7,0.003); o.connect(f); f.connect(g); g.connect(dest); o.start(t); o.stop(t+0.75);
+    const o2=ctx.createOscillator(), g2=ctx.createGain();
+    o2.type='sine'; o2.frequency.setValueAtTime(freq*3,t);
+    env(g2,t,vol*0.25,0.4,0.003); o2.connect(g2); g2.connect(dest); o2.start(t); o2.stop(t+0.45);
+  } else { // guitar — and the game's flute fallback (track 3 has no branch)
+    const o=ctx.createOscillator(), f=ctx.createBiquadFilter(), g=ctx.createGain();
+    o.type='sawtooth'; o.frequency.setValueAtTime(freq,t); f.type='lowpass'; f.Q.value=1.5;
+    f.frequency.setValueAtTime(2400,t); f.frequency.exponentialRampToValueAtTime(500,t+0.35);
+    env(g,t,vol,0.6); o.connect(f); f.connect(g); g.connect(dest);
+    const d=ctx.createDelay(0.2); d.delayTime.setValueAtTime(0.09,t);
+    const fb=ctx.createGain(); fb.gain.setValueAtTime(0.25,t);
+    const wet=ctx.createGain(); wet.gain.setValueAtTime(0.3,t);
+    g.connect(d); d.connect(fb); fb.connect(d); d.connect(wet); wet.connect(dest);
+    o.start(t); o.stop(t+0.7);
+  }
+}
+
+// ---- 3D scene: jam mat + 7 instruments on the game's arc ----
+const canvas = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio||1));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x16232c);
+scene.fog = new THREE.Fog(0x16232c, 20, 40);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+camera.position.set(0, 3.4, 8.2); camera.lookAt(0, 0.7, 0);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(4, 8, 4); scene.add(sun);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(12, 40),
+  new THREE.MeshStandardMaterial({ color:0x2a3d2a, roughness:1 }));
+ground.rotation.x = -Math.PI/2; ground.position.y = -0.01; scene.add(ground);
+const mat = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.4, 0.07, 40),
+  new THREE.MeshStandardMaterial({ color:0x9a7448, roughness:0.95 }));
+mat.position.y = 0.035; scene.add(mat);
+const ring = new THREE.Mesh(new THREE.TorusGeometry(3.28, 0.05, 10, 48),
+  new THREE.MeshStandardMaterial({ color:0xe2b43f, roughness:0.6 }));
+ring.rotation.x = Math.PI/2; ring.position.y = 0.09; scene.add(ring);
+
+const loader = new GLTFLoader();
+const groups = [], pickMeshes = [];
+let selected = -1, highlight = null;
+function select(i){
+  selected = i;
+  const inst = INSTRUMENTS[i];
+  document.getElementById('instName').textContent = inst.icon + ' ' + inst.name;
+  document.getElementById('instVoice').textContent = 'Voice: ' + inst.voice;
+  document.getElementById('nowPlaying').textContent = '';
+  const pads = document.getElementById('pads'); pads.innerHTML = '';
+  inst.notes.forEach((f, n)=>{
+    const b = document.createElement('button');
+    b.textContent = inst.labels[n] + ' · ' + f.toFixed(2) + ' Hz';
+    b.onclick = ()=>{ playVoice(i, f, 0.5);
+      document.getElementById('nowPlaying').textContent = 'Playing ' + inst.name + ' ' + inst.labels[n] + ' (' + f.toFixed(2) + ' Hz) — ' + inst.voice; };
+    pads.appendChild(b);
+  });
+  if (highlight) scene.remove(highlight);
+  highlight = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.04, 8, 40),
+    new THREE.MeshStandardMaterial({ color:0xe2b43f, emissive:0xe2b43f, emissiveIntensity:0.6 }));
+  highlight.rotation.x = Math.PI/2;
+  highlight.position.copy(groups[i].position); highlight.position.y = 0.08;
+  scene.add(highlight);
+  document.querySelectorAll('#picker button').forEach((b, j)=> b.classList.toggle('sel', j===i));
+}
+INSTRUMENTS.forEach((inst, i)=>{
+  const a = (i - 3) * 0.42; // game's arc: (i-(TRACKS-1)/2)*0.42
+  const x = 2.8 * Math.sin(a), z = 2.8 * Math.cos(a);
+  const g = new THREE.Group(); g.position.set(x, 0.07, z);
+  g.rotation.y = Math.atan2(-x, -z);
+  scene.add(g); groups.push(g);
+  loader.load('./instruments/' + inst.id + '.glb', (glb)=>{
+    const m = glb.scene; m.traverse(o=>{ if (o.isMesh){ o.castShadow = true; pickMeshes.push(o); o.userData.inst = i; } });
+    g.add(m);
+  }, undefined, (e)=>{ console.warn('Could not load', inst.id, e); });
+  const b = document.createElement('button');
+  b.textContent = inst.icon + ' ' + inst.name; b.style.margin = '4px'; b.style.padding = '8px 12px';
+  b.style.borderRadius = '8px'; b.style.cursor = 'pointer';
+  b.onclick = ()=> select(i);
+  document.getElementById('picker').appendChild(b);
+});
+const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+canvas.addEventListener('pointerdown', (e)=>{
+  const r = canvas.getBoundingClientRect();
+  ptr.x = ((e.clientX - r.left)/r.width)*2 - 1;
+  ptr.y = -((e.clientY - r.top)/r.height)*2 + 1;
+  ray.setFromCamera(ptr, camera);
+  const hit = ray.intersectObjects(pickMeshes, false)[0];
+  if (hit) select(hit.object.userData.inst);
+});
+function resize(){
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas); resize();
+renderer.setAnimationLoop(()=> renderer.render(scene, camera));
+select(0);
+</script>
+</body>
+</html>
