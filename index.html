@@ -79,14 +79,15 @@
     <div class="grid" id="trackGrid"></div>
     <div class="panel" id="vocalPanel" style="display:none">
       <h3>🎤 Vocal track for this section</h3>
-      <p class="small">Records your voice for exactly one section (8 beats at the current tempo). On playback it starts with the section. Autotune snaps each snippet of your voice to the nearest note of the C-major scale.</p>
+      <p class="small">No audio is recorded. Hum or sing into the mic while the section loops: the mic hears each pitch, turns it into a note snapped to the tempo grid, and saves just the notes. Playback re-synthesizes them with a vocal-style voice (formants + vibrato), so the vocal stays procedural data like every other track — and it can travel with a vinyl set as notes.</p>
       <p>
-        <button class="btn" id="recVocal">● Record vocal</button>
-        <button class="btn" id="stopVocal" disabled>⏹ Stop vocal</button>
-        <button class="btn" id="delVocal">Delete vocal</button>
-        <label><input type="checkbox" id="autotune" checked> Autotune</label>
+        <button class="btn" id="listenVocal">🎤 Hum into the mic (loops this section)</button>
+        <button class="btn" id="stopListen" disabled>⏹ Stop listening</button>
+        <button class="btn" id="delVocal">Delete vocal notes</button>
+        <label><input type="checkbox" id="snapScale" checked> Snap to C major</label>
         <span id="vocalState" class="small"></span>
       </p>
+      <p>Heard now: <strong id="heardNote">—</strong> &nbsp; Captured notes: <span id="vocalNotesList">— none —</span></p>
     </div>
   </div>
 </main>
@@ -193,6 +194,31 @@ function drumVoice(piece, when=null, vol=0.6){
   else if (piece==='crash') noiseThrough('highpass', 5000, 0.9, vol*0.6);
 }
 const TRACK_INDEX = { chimes:1, bass:2, piano:4, harp:5, guitar:6 };
+// Vocal-style voice: one oscillator through vowel formants ('ah') + gentle vibrato.
+// Pure synthesis — no samples, no recorded audio.
+function vocalVoice(midi, when, durSteps, vol=0.5){
+  const ctx = ensureCtx(), t = when, dur = Math.max(0.08, durSteps*stepDur());
+  const freq = midiFreq(midi);
+  const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(freq, t);
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 5.5;
+  const lfoGain = ctx.createGain(); lfoGain.gain.value = freq*0.006;
+  lfo.connect(lfoGain); lfoGain.connect(o.frequency); lfo.start(t); lfo.stop(t+dur);
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0.0001, t);
+  master.gain.exponentialRampToValueAtTime(Math.min(0.6, vol), t+0.03);
+  master.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(master);
+  [[730, 0.9], [1090, 0.6], [2440, 0.35]].forEach(([f, g])=>{
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = 1.2;
+    const gg = ctx.createGain(); gg.gain.value = g;
+    master.connect(bp); bp.connect(gg); gg.connect(bus);
+  });
+  o.start(t); o.stop(t+dur+0.05);
+}
+function playVocalNotesAt(sec, step, t){
+  (sec.vocalNotes || []).filter(n=>n.s===step).forEach(n=> vocalVoice(n.midi, t, n.len || 1));
+}
+
 
 // ---- 3D scene: jam mat + 6 instruments on the arc ----
 const canvas = document.getElementById('stage');
@@ -292,7 +318,7 @@ select(0);
 // ---- Song model: sections of 8 beats (32 sixteenth steps), each full of tracks ----
 const STEPS = 32; // 8 beats x 4 sixteenths
 function newSection(name){
-  const s = { name, drums: {}, tracks: {}, vocal: null };
+  const s = { name, drums: {}, tracks: {}, vocalNotes: [] };
   DRUM_PIECES.forEach(p=> s.drums[p] = []);
   MELODIC.forEach(i=> s.tracks[i.id] = []);
   return s;
@@ -309,7 +335,7 @@ function renderSections(){
   const el = document.getElementById('sectionList'); el.innerHTML = '';
   song.sections.forEach((s, i)=>{
     const b = document.createElement('button'); b.className = 'btn' + (i===sectionIdx ? ' on' : '');
-    b.textContent = (i+1) + '. ' + s.name + (s.vocal ? ' 🎤' : '');
+    b.textContent = (i+1) + '. ' + s.name + (s.vocalNotes && s.vocalNotes.length ? ' 🎤' : '');
     b.onclick = ()=>{ sectionIdx = i; renderSections(); renderGrid(); };
     el.appendChild(b);
   });
@@ -326,7 +352,7 @@ function renderTrackTabs(){
 function renderGrid(){
   const sec = curSection(), wrap = document.getElementById('trackGrid');
   document.getElementById('vocalPanel').style.display = trackTab==='vocal' ? 'block' : 'none';
-  if (trackTab==='vocal'){ wrap.innerHTML = '<p class="small">Use the vocal panel below to record a voice track for this section. It plays back in sync with the section, autotuned if that box is ticked.</p>'; updateVocalState(); return; }
+  if (trackTab==='vocal'){ wrap.innerHTML = '<p class="small">Use the vocal panel below: hum or sing into the mic and your notes are saved as data, then sung back by a vocal-style synth voice.</p>'; updateVocalState(); return; }
   let html = '<table><tr><th></th>';
   for (let s=0;s<STEPS;s++) html += '<th>' + (s%4===0 ? (Math.floor(s/4)+1) : '') + '</th>';
   html += '</tr>';
@@ -391,21 +417,12 @@ function playStepSounds(sec, step, t){
     const notes = scaleNotes(inst);
     sec.tracks[inst.id].filter(c=>c.s===step).forEach(c=> playVoice(TRACK_INDEX[inst.id], notes[c.n].freq, 0.5, t));
   });
+  playVocalNotesAt(sec, step, t);
   // Step highlight (approximate, via timeout to the step's audio time).
   const delay = Math.max(0, (t - actx.currentTime)*1000);
   setTimeout(()=>{
     document.querySelectorAll('#trackGrid .cell').forEach(el=> el.classList.toggle('now', +el.dataset.step===step));
   }, delay);
-}
-function scheduleVocal(sec, t){
-  if (!sec.vocal) return;
-  if (document.getElementById('autotune').checked) playAutotuned(sec, t);
-  else {
-    ensureCtx();
-    fetch(sec.vocal).then(r=>r.arrayBuffer()).then(buf=> actx.decodeAudioData(buf)).then(audio=>{
-      const src = actx.createBufferSource(); src.buffer = audio; src.connect(bus); src.start(t);
-    }).catch(()=>{});
-  }
 }
 function tick(){
   if (!playState.playing) return;
@@ -414,7 +431,6 @@ function tick(){
     const sec = song.sections[playState.sectionIdx];
     if (playState.step===0){
       playState.sectionStartTime = playState.nextTime;
-      scheduleVocal(sec, playState.nextTime);
     }
     playStepSounds(sec, playState.step, playState.nextTime);
     playState.nextTime += stepDur();
@@ -438,22 +454,36 @@ function startPlay(mode){
 }
 function stopPlay(updateLabel=true){
   if (vinylPlaying) stopVinylPlay();
+  try { if (listenState) stopListening(); } catch(e){}
   playState.playing = false;
   if (playState.timer){ clearInterval(playState.timer); playState.timer = null; }
   document.querySelectorAll('#trackGrid .cell').forEach(el=> el.classList.remove('now'));
   if (updateLabel) document.getElementById('playState').textContent = '';
 }
 
-// ---- Vocal: record with the mic, autotune by snapping grains to C major ----
-let mediaRecorder = null, vocalChunks = [], vocalStream = null;
-function updateVocalState(){
-  const sec = curSection();
-  document.getElementById('vocalState').textContent = sec.vocal ? '🎤 Vocal recorded for this section (' + (sec.vocal.length>1000 ? Math.round(sec.vocal.length/1024) + ' KB' : sec.vocal.length + ' chars') + '). It plays with the section.' : 'No vocal on this section yet.';
+// ---- Vocal: hum/sing into the mic -> notes, saved procedurally ----
+// Live pitch detection on the mic stream (autocorrelation), quantized to
+// the tempo grid while the section loops. Nothing audio is stored: only
+// {step, midi, len} notes, played back by vocalVoice().
+let listenState = null; // {stream, analyser, timer, current:{midi, startStep} | null, lastVoiced}
+function midiToSnap(midi){
+  if (!document.getElementById('snapScale').checked) return midi;
+  const degrees = [0,2,4,5,7,9,11];
+  let best = midi, bestD = 99;
+  for (let m=midi-3; m<=midi+3; m++){
+    if (!degrees.includes(((m%12)+12)%12)) continue;
+    const d = Math.abs(m - midi); if (d < bestD){ bestD = d; best = m; }
+  }
+  return best;
 }
-function estimatePitch(samples, sampleRate){
-  // Simple autocorrelation pitch estimate; returns Hz or null if unvoiced/quiet.
+function updateVocalState(){
+  const sec = curSection(), notes = sec.vocalNotes || [];
+  document.getElementById('vocalState').textContent = notes.length ? '🎤 ' + notes.length + ' vocal note(s) saved as data (procedural, no audio).' : 'No vocal notes on this section yet.';
+  document.getElementById('vocalNotesList').textContent = notes.length ? notes.map(n=> midiName(n.midi) + ' @' + (n.s+1) + ' x' + (n.len||1)).join(', ') : '— none —';
+}
+function estimatePitchFloat(samples, sampleRate){
   let rms = 0; for (let i=0;i<samples.length;i++) rms += samples[i]*samples[i];
-  rms = Math.sqrt(rms/samples.length); if (rms < 0.02) return null;
+  rms = Math.sqrt(rms/samples.length); if (rms < 0.015) return null;
   let bestLag = -1, bestCorr = 0;
   for (let lag=Math.floor(sampleRate/600); lag<=Math.floor(sampleRate/60); lag++){
     let corr = 0; for (let i=0;i<samples.length-lag;i++) corr += samples[i]*samples[i+lag];
@@ -463,34 +493,35 @@ function estimatePitch(samples, sampleRate){
   if (bestLag < 0 || bestCorr < rms*rms*0.5) return null;
   return sampleRate/bestLag;
 }
-function snapToCMajor(freq){
-  // Nearest C-major note (any octave) to the detected pitch.
-  const midi = 69 + 12*Math.log2(freq/440);
-  const degrees = [0,2,4,5,7,9,11];
-  let best = null;
-  for (let m=48; m<=84; m++){
-    if (!degrees.includes(((m%12)+12)%12)) continue;
-    const d = Math.abs(m - midi); if (best===null || d < best.d){ best = { m, d }; }
-  }
-  return midiFreq(best.m);
-}
-const vocalCache = new Map();
-function playAutotuned(sec, t0){
-  ensureCtx();
-  const cached = vocalCache.get(sec);
-  const go = (audio)=>{
-    const ch = audio.getChannelData(0), sr = audio.sampleRate, grain = 0.09, grainSamples = Math.floor(sr*grain);
-    for (let g=0, gt=0; g* grainSamples < ch.length; g++, gt+=grain){
-      const seg = ch.slice(g*grainSamples, (g+1)*grainSamples);
-      const f = estimatePitch(seg, sr);
-      const src = actx.createBufferSource(); src.buffer = audio;
-      src.playbackRate.value = f ? snapToCMajor(f)/f : 1;
-      src.connect(bus); src.start(t0+gt, g*grain, grain);
-      src.stop(t0+gt+grain);
+function listenTick(){
+  if (!listenState || !playState.playing) return;
+  const an = listenState.analyser, buf = new Float32Array(an.fftSize);
+  an.getFloatTimeDomainData(buf);
+  const freq = estimatePitchFloat(buf, actx.sampleRate);
+  const now = actx.currentTime;
+  const stepFloat = playState.sectionStartTime===null ? 0 : (now - playState.sectionStartTime)/stepDur();
+  const step = ((Math.floor(stepFloat) % STEPS) + STEPS) % STEPS;
+  if (freq){
+    const midi = midiToSnap(Math.round(69 + 12*Math.log2(freq/440)));
+    document.getElementById('heardNote').textContent = midiName(midi) + ' (' + freq.toFixed(1) + ' Hz)';
+    listenState.lastVoiced = now;
+    const cur = listenState.current;
+    if (!cur){ listenState.current = { midi, startStep: step, startTime: now }; }
+    else if (cur.midi !== midi){
+      saveHeardNote(cur, step); listenState.current = { midi, startStep: step, startTime: now };
     }
-  };
-  if (cached) go(cached);
-  else fetch(sec.vocal).then(r=>r.arrayBuffer()).then(buf=> actx.decodeAudioData(buf)).then(audio=>{ vocalCache.set(sec, audio); go(audio); }).catch(()=>{});
+  } else if (listenState.current && now - listenState.lastVoiced > 0.15){
+    saveHeardNote(listenState.current, step); listenState.current = null;
+    document.getElementById('heardNote').textContent = '—';
+  }
+}
+function saveHeardNote(cur, endStep){
+  const sec = song.sections[playState.sectionIdx];
+  let len = endStep - cur.startStep; if (len <= 0) len += STEPS;
+  len = Math.max(1, Math.min(len, STEPS));
+  sec.vocalNotes = (sec.vocalNotes || []).filter(n=>n.s!==cur.startStep);
+  sec.vocalNotes.push({ s: cur.startStep, midi: cur.midi, len });
+  if (playState.sectionIdx===sectionIdx) updateVocalState();
 }
 
 // ---- Vinyls: the game's save format, pattern-only, played back procedurally ----
@@ -559,6 +590,7 @@ function playVinyl(vinyl){
         const val = parseInt(vinyl.pattern.slice(ti*4, ti*4+4), 16);
         if ((val >> (15-step)) & 1) playVoice(ti, GAME_NOTES[tr][step % 5], 0.42, t);
       });
+      (vinyl.vocalNotes || []).filter(n=>n.s===step).forEach(n=> vocalVoice(n.midi, t, n.len || 1));
       vinylPlaying.nextTime += stepDur(); vinylPlaying.step++;
     }
   }, 25);
@@ -605,6 +637,13 @@ document.getElementById('pressVinyl').onclick = ()=>{
   const pressed = [];
   song.sections.forEach((sec, i)=> pressed.push(...sectionToVinyls(sec, name, song.bpm, i+1)));
   if (!pressed.length){ document.getElementById('playState').textContent = 'Nothing to press — this song has no notes yet.'; return; }
+  // Vocal notes ride along per vinyl (extra field; the game ignores it, the studio plays it).
+  pressed.forEach((v, vi)=>{
+    const secNum = parseInt(v.title.match(/S(\d+)/)?.[1] || '1', 10);
+    const chunk = v.title.endsWith('B') ? 1 : 0;
+    const sec = song.sections[secNum-1];
+    if (sec && sec.vocalNotes) v.vocalNotes = sec.vocalNotes.filter(n=> Math.floor(n.s/16)===chunk).map(n=> ({ s: n.s%16, midi: n.midi, len: n.len }));
+  });
   const list = pressed.concat(loadVinyls()); storeVinyls(list); renderVinyls();
   const set = { format:'plaza-jam-vinyl-set', song: name, bpm: song.bpm, vinyls: pressed };
   const blob = new Blob([JSON.stringify(set, null, 2)], { type:'application/json' });
@@ -625,33 +664,32 @@ document.getElementById('importVinyl').onchange = (e)=>{
   } catch(err){ document.getElementById('playState').textContent = 'That file is not a vinyl set.'; } };
   r.readAsText(f);
 };
-document.getElementById('recVocal').onclick = async ()=>{
+document.getElementById('listenVocal').onclick = async ()=>{
   try {
     ensureCtx();
-    vocalStream = await navigator.mediaDevices.getUserMedia({ audio:true });
-    vocalChunks = [];
-    mediaRecorder = new MediaRecorder(vocalStream);
-    mediaRecorder.ondataavailable = (e)=>{ if (e.data.size) vocalChunks.push(e.data); };
-    mediaRecorder.onstop = ()=>{
-      const blob = new Blob(vocalChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      const rd = new FileReader();
-      rd.onload = ()=>{ curSection().vocal = rd.result; vocalCache.delete(curSection()); renderSections(); updateVocalState(); };
-      rd.readAsDataURL(blob);
-      vocalStream.getTracks().forEach(t=>t.stop());
-      document.getElementById('recVocal').disabled = false; document.getElementById('stopVocal').disabled = true;
-      document.getElementById('vocalState').textContent = 'Vocal saved into this section.';
-    };
-    mediaRecorder.start();
-    document.getElementById('recVocal').disabled = true; document.getElementById('stopVocal').disabled = false;
-    document.getElementById('vocalState').textContent = '● Recording your voice… tap Stop vocal when done (recording stops by itself at the end of one section if you keep singing).';
-    // Auto-stop at one section length so the vocal always fits the section.
-    setTimeout(()=>{ if (mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); }, sectionDur()*1000 + 200);
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    const src = actx.createMediaStreamSource(stream);
+    const an = actx.createAnalyser(); an.fftSize = 2048; src.connect(an);
+    listenState = { stream, analyser: an, timer: setInterval(listenTick, 50), current: null, lastVoiced: 0 };
+    document.getElementById('listenVocal').disabled = true; document.getElementById('stopListen').disabled = false;
+    document.getElementById('vocalState').textContent = '🎤 Listening — hum or sing while the section loops. Notes snap to the grid as you sing them.';
+    if (!playState.playing) startPlay('section');
   } catch(err){
     document.getElementById('vocalState').textContent = 'Mic not available: ' + (err && err.message ? err.message : 'permission denied') + '. On a phone, open this page over https and allow the mic.';
   }
 };
-document.getElementById('stopVocal').onclick = ()=>{ if (mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); };
-document.getElementById('delVocal').onclick = ()=>{ curSection().vocal = null; vocalCache.delete(curSection()); renderSections(); updateVocalState(); };
+function stopListening(){
+  if (listenState){
+    if (listenState.current) saveHeardNote(listenState.current, ((Math.floor((actx.currentTime - (playState.sectionStartTime||0))/stepDur()) % STEPS) + STEPS) % STEPS);
+    clearInterval(listenState.timer);
+    listenState.stream.getTracks().forEach(t=>t.stop());
+    listenState = null;
+  }
+  document.getElementById('listenVocal').disabled = false; document.getElementById('stopListen').disabled = true;
+  document.getElementById('heardNote').textContent = '—'; updateVocalState();
+}
+document.getElementById('stopListen').onclick = stopListening;
+document.getElementById('delVocal').onclick = ()=>{ curSection().vocalNotes = []; renderSections(); updateVocalState(); };
 
 renderSections(); renderTrackTabs(); renderGrid(); renderVinyls();
 </script>
